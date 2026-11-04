@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Loader2, Upload, Brain } from "lucide-react";
+import { raiseStage, type DealStage } from "@/lib/dashboardUtils";
 
 interface UploadTabProps {
   leadId: string;
@@ -18,18 +19,34 @@ interface UploadTabProps {
 
 type InteractionType = "email_inbound" | "email_outbound" | "meeting" | "call" | "note";
 
+// Lowest stage each logged interaction implies. A call may be "no answer", so it
+// only proves contact. Notes don't move the stage.
+const MIN_STAGE: Partial<Record<InteractionType, DealStage>> = {
+  email_inbound: "engaged",
+  email_outbound: "contacted",
+  meeting: "post_meeting",
+  call: "contacted",
+};
+
+// DB timestamps ("…+00:00") and toISOString() ("….000Z") differ in format, so compare as dates.
+const later = (a: string | null | undefined, b: string) => (a && Date.parse(a) > Date.parse(b) ? a : b);
+const earlier = (a: string | null | undefined, b: string) => (a && Date.parse(a) < Date.parse(b) ? a : b);
+
 export default function UploadTab({ leadId, onSuccess }: UploadTabProps) {
   const [type, setType] = useState<InteractionType>("email_inbound");
   const [subject, setSubject] = useState("");
   const [fromEmail, setFromEmail] = useState("");
   const [toEmail, setToEmail] = useState("");
   const [bodyText, setBodyText] = useState("");
+  const [occurredAt, setOccurredAt] = useState(""); // datetime-local; empty = now
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isRunningPipeline, setIsRunningPipeline] = useState(false);
   const { runTask, isLoading: isAnalyzing } = useAITask();
 
   const isEmailType = type === "email_inbound" || type === "email_outbound";
   const isMeetingType = type === "meeting";
+  // Meetings and calls both get the recap + follow-up draft + deep analysis.
+  const isAnalysedType = type === "meeting" || type === "call";
 
   const buildLeadContext = async () => {
     const lead = await getLeadDetail(leadId);
@@ -56,7 +73,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       .trim();
   };
 
-  const runMeetingPipeline = async (meetingNotes: string) => {
+  const runRecapAndAnalysis = async (notes: string, kind: "meeting" | "call", interactionId: string) => {
     setIsRunningPipeline(true);
     try {
       const leadContext = await buildLeadContext();
@@ -68,17 +85,16 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         .join("\n---\n");
       const lead = await getLeadDetail(leadId);
       
-      // Clean meeting notes to reduce payload size
-      const cleanedMeetingNotes = cleanTextForPayload(meetingNotes, 3000);
-      console.log("[Meeting Pipeline] Meeting notes size:", cleanedMeetingNotes.length, "chars");
-      console.log("[Meeting Pipeline] Knowledge context size:", knowledgeContext.length, "chars");
+      // Clean notes to reduce payload size
+      const cleanedMeetingNotes = cleanTextForPayload(notes, 3000);
 
-      // Step 1: Post meeting recap
-      toast.info("Step 1/4: Generating meeting recap...");
+      // Step 1: recap + customer follow-up draft. The post_meeting_recap prompt
+      // takes "a meeting summary (or notes)", so call notes reuse it as-is.
+      toast.info(`Step 1/2: Generating ${kind} recap and follow-up draft...`);
       const recapResult = await runTask("post_meeting_recap", {
         mode: lead.strategy,
         lead_context: leadContext,
-        meeting_summary: cleanedMeetingNotes,
+        meeting_summary: kind === "call" ? `Phone call notes:\n${cleanedMeetingNotes}` : cleanedMeetingNotes,
         knowledge_context: knowledgeContext,
         meeting_link: lead.meeting_link || "",
       });
@@ -89,13 +105,27 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
           recapData = JSON.parse(extractJson(recapResult.content));
           // Save the customer email as a draft
           if (recapData.customer_email) {
-            await supabase.from("drafts").insert({
+            const { error: draftErr } = await supabase.from("drafts").insert({
               lead_id: leadId,
               channel: "email",
-              draft_type: "post_meeting_followup",
+              draft_type: kind === "call" ? "follow_up" : "post_meeting_followup",
               subject: recapData.customer_email.subject,
               body_text: recapData.customer_email.body,
               to_recipient: lead.email,
+            });
+            if (draftErr) {
+              console.error("Failed to save follow-up draft:", draftErr);
+              toast.warning("Couldn't save the follow-up email draft");
+            } else {
+              toast.success("Follow-up email draft saved to Drafts");
+            }
+          }
+          // Durable summary on the timeline row: the AI context builders read
+          // ai_summary first, so the gist survives even if the raw text is purged.
+          const bullets: unknown = recapData.internal_recap_bullets;
+          if (Array.isArray(bullets) && bullets.length) {
+            await annotateInteractionAI(leadId, interactionId, {
+              summary: bullets.map(String).join(" • ").slice(0, 1000),
             });
           }
         } catch (e) {
@@ -145,7 +175,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
           nextStepReason: recsData.best_next_step?.why || null,
           dealOutlook: factorsData?.overall_outlook || null,
         });
-        toast.success("Meeting analysis complete! Check Recommendations tab for insights.");
+        toast.success(`${kind === "call" ? "Call" : "Meeting"} analysis complete — deal insights updated.`);
       } catch (updateError) {
         console.error("Failed to update lead:", updateError);
         toast.error("Failed to save analysis to lead");
@@ -165,6 +195,14 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       return;
     }
 
+    // Optional "when did this happen?" (local time). Empty = now.
+    const occurred = occurredAt ? new Date(occurredAt) : new Date();
+    if (Number.isNaN(occurred.getTime()) || occurred.getTime() > Date.now() + 60_000) {
+      toast.error("Please pick a date and time that isn't in the future");
+      return;
+    }
+    const occurredIso = occurred.toISOString();
+
     setIsSubmitting(true);
 
     try {
@@ -177,64 +215,30 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
         from_email: fromEmail || undefined,
         to_email: toEmail || undefined,
         body_text: bodyText,
+        occurred_at: occurredIso,
       });
 
-      // Auto-update lead state based on interaction type
-      const now = new Date().toISOString();
-      if (type === "email_inbound") {
-        // Update timestamps and elevate stage to at least 'engaged'
+      // Auto-update lead state. Stage only ever moves forward; timestamps only
+      // move if this interaction is newer (or, for first outbound, older).
+      const minStage = MIN_STAGE[type];
+      if (minStage) {
         const { data: currentLead } = await supabase
           .from("leads")
-          .select("stage, last_inbound_at, motion")
+          .select("stage, last_inbound_at, last_outbound_at, first_outbound_at")
           .eq("id", leadId)
           .single();
 
-        const stageHierarchy: Record<string, number> = {
-          new: 0, contacted: 1, engaged: 2, post_meeting: 3, closing: 4, closed: 5,
-        };
-        const currentStageRank = stageHierarchy[currentLead?.stage || "new"] ?? 0;
-        const newStage = currentStageRank < 2 ? "engaged" : currentLead?.stage;
-
-        await supabase
-          .from("leads")
-          .update({
-            last_inbound_at: now,
-            stage: newStage,
-            last_activity_at: now,
-          })
-          .eq("id", leadId);
-      } else if (type === "email_outbound") {
-        // Update outbound timestamps
-        const { data: currentLead } = await supabase
-          .from("leads")
-          .select("first_outbound_at, stage")
-          .eq("id", leadId)
-          .single();
-
-        const stageHierarchy: Record<string, number> = {
-          new: 0, contacted: 1, engaged: 2, post_meeting: 3, closing: 4, closed: 5,
-        };
-        const currentStageRank = stageHierarchy[currentLead?.stage || "new"] ?? 0;
-        const newStage = currentStageRank < 1 ? "contacted" : currentLead?.stage;
-
-        await supabase
-          .from("leads")
-          .update({
-            last_outbound_at: now,
-            first_outbound_at: currentLead?.first_outbound_at || now,
-            stage: newStage,
-            last_activity_at: now,
-          })
-          .eq("id", leadId);
-      } else if (type === "meeting") {
-        // Update stage to post_meeting
-        await supabase
-          .from("leads")
-          .update({
-            stage: "post_meeting",
-            last_activity_at: now,
-          })
-          .eq("id", leadId);
+        const update: Record<string, string> = {};
+        const stage = raiseStage(currentLead?.stage, minStage);
+        if (stage !== currentLead?.stage) update.stage = stage;
+        if (type === "email_inbound") update.last_inbound_at = later(currentLead?.last_inbound_at, occurredIso);
+        if (type === "email_outbound") {
+          update.last_outbound_at = later(currentLead?.last_outbound_at, occurredIso);
+          update.first_outbound_at = earlier(currentLead?.first_outbound_at, occurredIso);
+        }
+        if (Object.keys(update).length) {
+          await supabase.from("leads").update(update).eq("id", leadId);
+        }
       }
 
       // If inbound email, run intent router
@@ -248,7 +252,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
 
         if (result.ok && result.content) {
           try {
-            const parsed = JSON.parse(result.content);
+            const parsed = JSON.parse(extractJson(result.content));
             // Canonical-first AI annotation. Targets the exact row
             // `insertInteraction` just wrote (no fuzzy "latest by
             // occurred_at" lookup). Helper writes
@@ -265,10 +269,9 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
             console.error("Failed to parse intent router response");
           }
         }
-      } else if (type === "meeting") {
-        // For meeting summaries, run the full AI pipeline
-        toast.success("Meeting notes added. Starting AI analysis pipeline...");
-        await runMeetingPipeline(bodyText);
+      } else if (type === "meeting" || type === "call") {
+        toast.success(`${type === "call" ? "Call" : "Meeting"} notes added. Starting AI analysis...`);
+        await runRecapAndAnalysis(bodyText, type, inserted.id);
       } else {
         toast.success("Interaction added");
       }
@@ -278,6 +281,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       setFromEmail("");
       setToEmail("");
       setBodyText("");
+      setOccurredAt("");
       onSuccess();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to add interaction");
@@ -293,7 +297,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
       <CardHeader>
         <CardTitle>Add Interaction</CardTitle>
         <CardDescription>
-          Upload an email, meeting notes, or call summary. Inbound emails are analyzed for intent. Meeting notes trigger a full AI analysis pipeline.
+          Upload an email, meeting notes, or call summary. Inbound emails are analyzed for intent. Meeting and call notes update deal insights and draft a follow-up email.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -347,13 +351,24 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
             </>
           )}
 
-          {isMeetingType && (
+          <div className="space-y-2">
+            <Label htmlFor="interaction-occurred-at">When did this happen? (optional)</Label>
+            <Input
+              id="interaction-occurred-at"
+              type="datetime-local"
+              value={occurredAt}
+              onChange={(e) => setOccurredAt(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Leave empty for right now.</p>
+          </div>
+
+          {isAnalysedType && (
             <div className="p-3 bg-primary/10 rounded-lg flex items-start gap-2">
               <Brain className="h-5 w-5 text-primary mt-0.5" />
               <div className="text-sm">
                 <p className="font-medium text-primary">AI Analysis Pipeline</p>
                 <p className="text-muted-foreground">
-                  Meeting notes will automatically trigger: recap generation → milestone extraction → deal factor analysis → next step recommendations
+                  {isMeetingType ? "Meeting" : "Call"} notes will automatically trigger: recap + follow-up email draft → milestones, risks and deal factors → next step recommendation
                 </p>
               </div>
             </div>
@@ -376,7 +391,7 @@ ${lead.personal_notes ? `Notes: ${lead.personal_notes}` : ""}`;
             ) : (
               <Upload className="h-4 w-4 mr-2" />
             )}
-            {isRunningPipeline ? "Running AI Pipeline..." : isAnalyzing ? "Analyzing..." : isSubmitting ? "Saving..." : isMeetingType ? "Add & Analyze Meeting" : "Add Interaction"}
+            {isRunningPipeline ? "Running AI Pipeline..." : isAnalyzing ? "Analyzing..." : isSubmitting ? "Saving..." : isMeetingType ? "Add & Analyze Meeting" : type === "call" ? "Add & Analyze Call" : "Add Interaction"}
           </Button>
         </form>
       </CardContent>
