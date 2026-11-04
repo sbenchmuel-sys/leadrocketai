@@ -301,3 +301,14 @@ CREATE POLICY "Workspace members can update lead candidate status" ON public.lea
   WITH CHECK (public.is_workspace_member(workspace_id, auth.uid()));
 GRANT SELECT ON public.lead_candidates TO authenticated;
 GRANT UPDATE (status, resolved_at) ON public.lead_candidates TO authenticated;
+
+-- Added for timeline_items_user_insert.test.sql: production's pre-fix policies on
+-- lead_timeline_items (read for members, update for lead owner, no user INSERT).
+ALTER TABLE public.lead_timeline_items ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Workspace members can view timeline items" ON public.lead_timeline_items
+  FOR SELECT TO authenticated USING (public.is_workspace_member(workspace_id, auth.uid()));
+CREATE POLICY "Lead owners can update timeline items" ON public.lead_timeline_items
+  FOR UPDATE TO authenticated USING (EXISTS (SELECT 1 FROM public.leads
+    WHERE leads.id = lead_timeline_items.lead_id AND leads.owner_user_id = auth.uid()));
+GRANT SELECT, INSERT, UPDATE ON public.lead_timeline_items TO authenticated;
+GRANT SELECT ON public.leads TO authenticated;
