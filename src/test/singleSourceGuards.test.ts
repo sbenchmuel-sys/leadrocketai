@@ -36,7 +36,9 @@ describe("single-source guards (enable per unit)", () => {
   it('"lovable.dev" appears only in _shared/aiGateway.ts [E-S1a]', () => {
     const bad = offenders(
       ["supabase/functions"],
-      /lovable\.dev/,
+      // ponytail: skips the `@lovable.dev/` npm scope (auth-email-hook's
+      // email-js import) — that's Lovable's SDK, not the AI gateway.
+      /(?<!@)lovable\.dev/,
       (rel) => rel === "supabase/functions/_shared/aiGateway.ts",
     );
     expect(bad).toEqual([]);
