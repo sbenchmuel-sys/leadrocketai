@@ -474,7 +474,7 @@ async function scanGmail(
 // deno-lint-ignore no-explicit-any
 async function scanOutlook(
   serviceSupabase: any,
-  account: { id: string; workspace_id: string; email_address: string },
+  account: { id: string; workspace_id: string; email_address: string; user_id: string | null },
   accessToken: string,
   ctx: WorkspaceFilterContext,
   scanSince: Date,
@@ -528,7 +528,7 @@ async function scanOutlook(
           const domain = emailDomain(recipEmail);
           const action = await upsertCandidate(serviceSupabase, {
             workspaceId: account.workspace_id,
-            ownerUserId: null, // Outlook mail_accounts have no user_id
+            ownerUserId: account.user_id, // the mailbox owner; RLS shows candidates to their owner only
             contactEmail: recipEmail,
             contactName: recipName,
             companyDomain: domain || null,
@@ -594,7 +594,7 @@ async function scanOutlook(
         const domain = emailDomain(senderEmail);
         const action = await upsertCandidate(serviceSupabase, {
           workspaceId: account.workspace_id,
-          ownerUserId: null,
+          ownerUserId: account.user_id,
           contactEmail: senderEmail,
           contactName: senderName,
           companyDomain: domain || null,
@@ -682,7 +682,7 @@ serve(async (req) => {
   // ── Outlook mail accounts ────────────────────────────────
   const { data: outlookAccounts, error: outlookErr } = await serviceSupabase
     .from("mail_accounts")
-    .select("id, workspace_id, email_address")
+    .select("id, workspace_id, email_address, user_id")
     .eq("provider", "outlook")
     .eq("status", "connected");
 
