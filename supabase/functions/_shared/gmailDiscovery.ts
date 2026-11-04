@@ -53,10 +53,17 @@ export function gmailDirectDiscoveryQuery(leadEmail: string, repEmail: string): 
 /**
  * Which threads to expand this run.
  *
- * Never-synced threads first — recent activity in known threads is already
- * covered by the newest-page per-message pass, so the scarce slots go to
- * threads we have never seen. Order within each group is the caller's
+ * Never-synced threads ONLY. New activity in a known thread is already covered
+ * by the newest-page per-message pass (the direct query lists it like any other
+ * message), so re-downloading known threads every visit bought nothing. It used
+ * to cost ~9 full-thread fetches per lead per run, which was most of
+ * gmail-bulk-sync's run time (DB load plan, Unit B). Order is the caller's
  * (discovery order = newest first). Deterministic; never mutates the input.
+ *
+ * ponytail: a known thread that gets more new direct messages than the per-message
+ * page holds (10 on the cron path) between two visits has the overflow
+ * picked up only when it scrolls into the page. Upgrade path: the Gmail history
+ * API (users.history.list) instead of search.
  *
  * With the query above, every thread in `threadIds` is a direct rep↔lead
  * thread, so every expansion writes at least one row and the thread becomes
@@ -70,6 +77,47 @@ export function selectThreadsToExpand(
   cap: number,
 ): string[] {
   return Array.from(threadIds)
-    .sort((a, b) => (previouslySynced.has(a) ? 1 : 0) - (previouslySynced.has(b) ? 1 : 0))
+    .filter((t) => !previouslySynced.has(t))
     .slice(0, cap);
+}
+
+/**
+ * gmail-bulk-sync's incremental pass: the last day of the mailbox, minus the
+ * Promotions / Social / Forums tabs, drafts and chats. Stateless on purpose:
+ * `gmail_connections.last_sync_at` is also stamped by the interactive paths
+ * after syncing only a few leads, so it cannot serve as a "mail seen up to here"
+ * watermark. A window that overlaps the previous runs is safe: already-stored
+ * message ids are dropped before any per-message fetch.
+ * ponytail: mail older than the window (an outage longer than a day) is picked
+ * up by the cursor rotation instead, not here.
+ */
+export const INCREMENTAL_QUERY =
+  "newer_than:1d -in:drafts -in:chats -category:promotions -category:social -category:forums";
+
+/**
+ * Which of the rep's leads appear in these messages: lead address in From or To
+ * (not Cc — the same To-only rule as the direct-conversation gate, which
+ * syncLeadEmails still applies). Addresses compared lower-cased. The rep's own
+ * address never counts as a lead. Lead ids are returned in message order (newest
+ * first when the caller passes Gmail's order), each once.
+ */
+export function leadsInMessages<L extends { id: string; email: string | null }>(
+  messages: ReadonlyArray<{ from: readonly string[]; to: readonly string[] }>,
+  leads: readonly L[],
+  repEmail: string,
+): L[] {
+  const rep = repEmail.trim().toLowerCase();
+  const byEmail = new Map<string, L>();
+  for (const l of leads) {
+    const e = l.email?.trim().toLowerCase();
+    if (e && e !== rep && !byEmail.has(e)) byEmail.set(e, l);
+  }
+  const out = new Map<string, L>();
+  for (const m of messages) {
+    for (const addr of [...m.from, ...m.to]) {
+      const lead = byEmail.get(addr.trim().toLowerCase());
+      if (lead && !out.has(lead.id)) out.set(lead.id, lead);
+    }
+  }
+  return [...out.values()];
 }

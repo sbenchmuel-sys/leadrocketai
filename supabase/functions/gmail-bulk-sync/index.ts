@@ -14,7 +14,12 @@ import { emailDedupeKey } from "../_shared/timelineProjector.ts";
 import { detectBounce } from "../_shared/bounceDetection.ts";
 import { bounceDisposition } from "../_shared/bounceDisposition.ts";
 import { isDirectConversation } from "../_shared/directConversation.ts";
-import { gmailDirectDiscoveryQuery, selectThreadsToExpand } from "../_shared/gmailDiscovery.ts";
+import {
+  gmailDirectDiscoveryQuery,
+  INCREMENTAL_QUERY,
+  leadsInMessages,
+  selectThreadsToExpand,
+} from "../_shared/gmailDiscovery.ts";
 import { extractEmailsFromHeader } from "../_shared/emailUtils.ts";
 import { isInternalCaller, isServiceRoleToken } from "../_shared/authz.ts";
 import { deriveAction } from "../_shared/bulkSyncAction.ts";
@@ -1229,8 +1234,14 @@ async function resolveWorkspaceIds(serviceSupabase: any, userId: string): Promis
 //
 // RUN_BUDGET_MS: a single run-wide wall-clock budget, checked between connections
 // AND between leads, so total work is bounded regardless of how many accounts /
-// leads exist. Kept under cron-dispatcher's 55s forward timeout so the dispatcher
-// doesn't record every tick as a 504.
+// leads exist. Each connection spends it on the INCREMENTAL pass first (leads
+// with mail in the last day, see findLeadsWithNewMail) and the rest on the cursor
+// rotation below. The rotation now only backfills and re-derives time-based
+// actions, so it can be slow. 8 s (was 45 s, which every run used up: DB load
+// plan, Unit B).
+// ponytail: at ~0.5 s/lead the rotation covers ~10 leads/run, so a 381-lead
+// rep takes ~13 h per lap: a quiet lead's followup_due can appear up to ~13 h
+// late. Upgrade path: a separate, rarer full-sweep schedule with its own budget.
 //
 // LEADS_PER_PAGE: how many of a connection owner's leads one run pulls into memory.
 // Coverage is guaranteed by a PERSISTED per-connection cursor (gmail_connections
@@ -1240,9 +1251,92 @@ async function resolveWorkspaceIds(serviceSupabase: any, userId: string): Promis
 // next run and no tail is ever permanently skipped. Connections are also rotated per
 // tick so a long-running early account can't starve later ones. syncLeadEmails is
 // idempotent (dedup by gmail_message_id), so any overlap is harmless.
-const RUN_BUDGET_MS = 45_000;
+const RUN_BUDGET_MS = 8_000;
 const LEADS_PER_PAGE = 150;
 const CRON_MAX_RESULTS = 10;
+// Incremental pass bounds: Gmail ids listed per connection per run, and how many
+// not-yet-stored ones get a From/To metadata fetch (in batches, to stay under
+// Gmail's per-user concurrency limit).
+const INCREMENTAL_LIST_MAX = 100;
+const INCREMENTAL_METADATA_MAX = 50;
+const INCREMENTAL_FETCH_BATCH = 10;
+
+type ScheduledLead = { id: string; email: string; stage: string; strategy: string; workspace_id: string | null };
+
+/**
+ * The rep's leads that appear in mailbox mail from the last day that is not
+ * stored yet. These are synced first each run, so a reply lands within one tick
+ * instead of waiting up to a full cursor lap (~4.5 h before this change).
+ *
+ * One Gmail list, one interactions lookup (drops already-stored ids, so a
+ * purged-body row is not re-fetched here), From/To metadata for the rest, one
+ * paged read of the rep's leads. syncLeadEmails still applies every gate.
+ * Fails soft: any error returns [] and the rotation carries on as before.
+ * ponytail: mail that never becomes a row (newsletters in Primary) is re-checked
+ * each run while it is in the 1-day window, capped at INCREMENTAL_METADATA_MAX
+ * fetches. With more unknown mail than the cap, the oldest of it waits for the
+ * rotation.
+ */
+// deno-lint-ignore no-explicit-any
+async function findLeadsWithNewMail(
+  serviceSupabase: any,
+  accessToken: string,
+  userId: string,
+  workspaceIds: string[],
+  repEmail: string,
+): Promise<ScheduledLead[]> {
+  const auth = { headers: { Authorization: `Bearer ${accessToken}` } };
+  const listRes = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(INCREMENTAL_QUERY)}&maxResults=${INCREMENTAL_LIST_MAX}`,
+    auth,
+  );
+  if (!listRes.ok) {
+    console.warn(`[gmail-bulk-sync] cron: user=${userId} incremental list failed: ${listRes.status}`);
+    return [];
+  }
+  const ids: string[] = ((await listRes.json()).messages ?? []).map((m: { id: string }) => m.id);
+  if (ids.length === 0) return [];
+
+  const { data: known } = await serviceSupabase
+    .from("interactions")
+    .select("gmail_message_id")
+    .in("gmail_message_id", ids);
+  const knownIds = new Set((known ?? []).map((r: { gmail_message_id: string }) => r.gmail_message_id));
+  const fresh = ids.filter((id) => !knownIds.has(id)).slice(0, INCREMENTAL_METADATA_MAX);
+  if (fresh.length === 0) return [];
+
+  const heads: Array<{ from: string[]; to: string[] }> = [];
+  for (let i = 0; i < fresh.length; i += INCREMENTAL_FETCH_BATCH) {
+    const batch = await Promise.all(fresh.slice(i, i + INCREMENTAL_FETCH_BATCH).map(async (id) => {
+      const r = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To`,
+        auth,
+      );
+      if (!r.ok) return null;
+      const h = (await r.json()).payload?.headers ?? [];
+      return { from: extractEmailAddresses(getHeader(h, "From") || ""), to: extractEmailsFromHeader(getHeader(h, "To")) };
+    }));
+    for (const b of batch) if (b) heads.push(b);
+  }
+  if (heads.length === 0) return [];
+
+  // Paged: PostgREST caps a single response at max_rows (1000).
+  const leads: ScheduledLead[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await serviceSupabase
+      .from("leads")
+      .select("id, email, stage, strategy, workspace_id")
+      .in("workspace_id", workspaceIds)
+      .eq("owner_user_id", userId)
+      .not("email", "is", null)
+      .order("id", { ascending: true })
+      .range(from, from + 999);
+    if (error || !data) break;
+    leads.push(...data);
+    if (data.length < 1000) break;
+  }
+  return leadsInMessages(heads, leads, repEmail);
+}
 
 // Monotonic, ~per-tick rotation seed. The sweep cron fires every 20 min; bucketing
 // wall-clock into 20-min slots gives a different starting offset each run without
@@ -1299,6 +1393,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
   let connectionsDeferred = 0;
   let leadsProcessed = 0;
   let leadsDeferred = 0;
+  let incrementalLeads = 0;
   let totalSynced = 0;
   let budgetExhausted = false;
 
@@ -1438,7 +1533,40 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     let processed = 0;
     // One read per connection per sweep — NOT per lead.
     const cadenceModes = await loadCadenceModes(serviceSupabase, conn.user_id);
-    for (const lead of windowLeads) {
+
+    // ── Incremental pass: leads with new mail first (see findLeadsWithNewMail) ──
+    // No cursor here. A lead the budget cuts off is still unstored, so it is
+    // found again next run.
+    let newMailLeads: ScheduledLead[] = [];
+    try {
+      newMailLeads = await findLeadsWithNewMail(serviceSupabase, accessToken, conn.user_id, workspaceIds, conn.gmail_email);
+    } catch (err) {
+      console.warn(`[gmail-bulk-sync] cron: user=${conn.user_id} incremental pass failed:`, err instanceof Error ? err.message : err);
+    }
+    for (let i = 0; i < newMailLeads.length; i++) {
+      if (Date.now() - startedAt > RUN_BUDGET_MS) {
+        budgetExhausted = true;
+        leadsDeferred += newMailLeads.length - i;
+        break;
+      }
+      try {
+        const result = await syncLeadEmails(serviceSupabase, accessToken, newMailLeads[i], CRON_MAX_RESULTS, cadenceModes, conn.gmail_email);
+        totalSynced += result.synced;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (isAccountWideAuthError(msg)) {
+          console.error(`[gmail-bulk-sync] cron: user=${conn.user_id} account-wide auth failure — flagging needs_reconnect:`, msg);
+          await serviceSupabase.from("gmail_connections").update({ needs_reconnect: true }).eq("user_id", conn.user_id);
+          accountAuthFailed = true;
+          break;
+        }
+        console.error(`[gmail-bulk-sync] cron: lead=${newMailLeads[i].id} incremental sync failed:`, msg);
+      }
+      leadsProcessed++;
+      incrementalLeads++;
+    }
+
+    for (const lead of accountAuthFailed ? [] : windowLeads) {
       // Budget reached mid-window: STOP without advancing for this lead. The cursor
       // still points at it (last persisted from the previous iteration), so the next
       // run resumes exactly here — no permanent skip.
@@ -1512,6 +1640,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     connectionsDeferred,
     leadsProcessed,
     leadsDeferred,
+    incrementalLeads,
     totalSynced,
   };
   console.log("[gmail-bulk-sync] cron done", JSON.stringify(summary));

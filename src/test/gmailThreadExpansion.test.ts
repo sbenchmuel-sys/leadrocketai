@@ -151,9 +151,9 @@ describe("gmailDirectDiscoveryQuery", () => {
 });
 
 describe("selectThreadsToExpand", () => {
-  it("puts never-synced threads first, keeps caller order within each group", () => {
+  it("expands ONLY never-synced threads, in caller order (known threads are covered by the newest-page pass)", () => {
     const synced = new Set(["k1", "k2"]);
-    expect(selectThreadsToExpand(["k1", "n1", "k2", "n2"], synced, 10)).toEqual(["n1", "n2", "k1", "k2"]);
+    expect(selectThreadsToExpand(["k1", "n1", "k2", "n2"], synced, 10)).toEqual(["n1", "n2"]);
   });
 
   it("respects the cap", () => {
