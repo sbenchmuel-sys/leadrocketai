@@ -53,17 +53,20 @@ export function gmailDirectDiscoveryQuery(leadEmail: string, repEmail: string): 
 /**
  * Which threads to expand this run.
  *
- * Never-synced threads ONLY. New activity in a known thread is already covered
- * by the newest-page per-message pass (the direct query lists it like any other
- * message), so re-downloading known threads every visit bought nothing. It used
- * to cost ~9 full-thread fetches per lead per run, which was most of
- * gmail-bulk-sync's run time (DB load plan, Unit B). Order is the caller's
- * (discovery order = newest first). Deterministic; never mutates the input.
+ * Never-synced threads, plus known threads in `recheck`: ones with a message we
+ * have not stored yet. Callers pass (a) threads whose discovered message ids are
+ * not stored, which drains more than one page of new direct mail, and (b)
+ * threads the incremental pass saw new mail in, which catches a postmaster DSN
+ * landing in a known thread (it matches neither the direct query nor any lead
+ * header). Known threads with nothing new are NOT re-downloaded. That used to be
+ * ~9 full-thread fetches per lead per run, most of gmail-bulk-sync's run time
+ * (DB load plan, Unit B).
  *
- * ponytail: a known thread that gets more new direct messages than the per-message
- * page holds (10 on the cron path) between two visits has the overflow
- * picked up only when it scrolls into the page. Upgrade path: the Gmail history
- * API (users.history.list) instead of search.
+ * Never-synced first, then rechecks; caller order within each group (discovery
+ * order = newest first). Deterministic; never mutates the input.
+ *
+ * ponytail: a message the gate never stores (an open draft, a transient bounce)
+ * keeps its thread in `recheck`, so that one thread is re-fetched on each visit.
  *
  * With the query above, every thread in `threadIds` is a direct rep↔lead
  * thread, so every expansion writes at least one row and the thread becomes
@@ -75,9 +78,11 @@ export function selectThreadsToExpand(
   threadIds: Iterable<string>,
   previouslySynced: ReadonlySet<string>,
   cap: number,
+  recheck: ReadonlySet<string> = new Set(),
 ): string[] {
   return Array.from(threadIds)
-    .filter((t) => !previouslySynced.has(t))
+    .filter((t) => !previouslySynced.has(t) || recheck.has(t))
+    .sort((a, b) => (previouslySynced.has(a) ? 1 : 0) - (previouslySynced.has(b) ? 1 : 0))
     .slice(0, cap);
 }
 

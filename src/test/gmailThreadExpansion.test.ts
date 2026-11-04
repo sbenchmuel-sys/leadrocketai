@@ -156,6 +156,11 @@ describe("selectThreadsToExpand", () => {
     expect(selectThreadsToExpand(["k1", "n1", "k2", "n2"], synced, 10)).toEqual(["n1", "n2"]);
   });
 
+  it("re-expands a KNOWN thread only when the caller flags it for recheck (unseen mail / DSN)", () => {
+    const synced = new Set(["k1", "k2"]);
+    expect(selectThreadsToExpand(["k1", "n1", "k2"], synced, 10, new Set(["k2"]))).toEqual(["n1", "k2"]);
+  });
+
   it("respects the cap", () => {
     expect(selectThreadsToExpand(["a", "b", "c"], new Set(), 2)).toEqual(["a", "b"]);
   });

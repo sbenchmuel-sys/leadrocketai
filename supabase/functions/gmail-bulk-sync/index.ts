@@ -406,6 +406,10 @@ async function syncLeadEmails(
   // The mailbox we are syncing FROM. Required by the rep↔lead gate below; when
   // it is unknown the gate fails closed and nothing is stored (see the gate).
   repEmail = "",
+  // Known threads the caller saw new mail in (the cron incremental pass): always
+  // expanded, so e.g. a DSN in an already-synced thread still reaches the bounce
+  // handler.
+  recheckThreadIds: ReadonlySet<string> = new Set(),
 ): Promise<{ synced: number; errors: string[]; stage: string }> {
   const { id: leadId, email: leadEmail, stage: currentStage } = lead;
   const workspaceId = lead.workspace_id ?? null;
@@ -520,6 +524,13 @@ async function syncLeadEmails(
   const existingBodyByMessageId = new Map(
     (existingInteractions || []).map((i: { gmail_message_id: string; body_text: string | null }) => [i.gmail_message_id, i.body_text])
   );
+  // Known threads holding a discovered message we have not stored: re-expand
+  // them, so more than one page of new direct mail is drained, not just the
+  // newest `maxResults`. Taken before the loop below marks messages as stored.
+  const recheck = new Set<string>(recheckThreadIds);
+  for (const m of discovered) {
+    if (m.threadId && !existingMessageIds.has(m.id)) recheck.add(m.threadId);
+  }
 
   // Fetch and process each message
   for (const { id: gmailMessageId } of messageIds) {
@@ -768,7 +779,7 @@ async function syncLeadEmails(
   // (backfill) threads over already-synced ones — recent activity in known
   // threads is already covered by the newest-page per-message loop above, so the
   // scarce slots are best spent pulling threads we've never seen.
-  const threadsToExpand = selectThreadsToExpand(lockedThreadIds, previouslySyncedThreadIds, MAX_THREADS_PER_LEAD);
+  const threadsToExpand = selectThreadsToExpand(lockedThreadIds, previouslySyncedThreadIds, MAX_THREADS_PER_LEAD, recheck);
   for (const threadId of threadsToExpand) {
     try {
       const threadUrl = `https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?format=full`;
@@ -1268,8 +1279,9 @@ type ScheduledLead = { id: string; email: string; stage: string; strategy: strin
  * stored yet. These are synced first each run, so a reply lands within one tick
  * instead of waiting up to a full cursor lap (~4.5 h before this change).
  *
- * One Gmail list, one interactions lookup (drops already-stored ids, so a
- * purged-body row is not re-fetched here), From/To metadata for the rest, one
+ * One Gmail list, two interactions lookups (drop already-stored ids, so a
+ * purged-body row is not re-fetched here; map new mail in known threads to their
+ * lead), From/To metadata only for mail in unknown threads, one
  * paged read of the rep's leads. syncLeadEmails still applies every gate.
  * Fails soft: any error returns [] and the rotation carries on as before.
  * ponytail: mail that never becomes a row (newsletters in Primary) is re-checked
@@ -1284,7 +1296,7 @@ async function findLeadsWithNewMail(
   userId: string,
   workspaceIds: string[],
   repEmail: string,
-): Promise<ScheduledLead[]> {
+): Promise<Array<{ lead: ScheduledLead; recheck: Set<string> }>> {
   const auth = { headers: { Authorization: `Bearer ${accessToken}` } };
   const listRes = await fetch(
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(INCREMENTAL_QUERY)}&maxResults=${INCREMENTAL_LIST_MAX}`,
@@ -1294,20 +1306,35 @@ async function findLeadsWithNewMail(
     console.warn(`[gmail-bulk-sync] cron: user=${userId} incremental list failed: ${listRes.status}`);
     return [];
   }
-  const ids: string[] = ((await listRes.json()).messages ?? []).map((m: { id: string }) => m.id);
-  if (ids.length === 0) return [];
+  const listed: Array<{ id: string; threadId: string }> = (await listRes.json()).messages ?? [];
+  if (listed.length === 0) return [];
 
   const { data: known } = await serviceSupabase
     .from("interactions")
     .select("gmail_message_id")
-    .in("gmail_message_id", ids);
+    .in("gmail_message_id", listed.map((m) => m.id));
   const knownIds = new Set((known ?? []).map((r: { gmail_message_id: string }) => r.gmail_message_id));
-  const fresh = ids.filter((id) => !knownIds.has(id)).slice(0, INCREMENTAL_METADATA_MAX);
+  const fresh = listed.filter((m) => !knownIds.has(m.id));
   if (fresh.length === 0) return [];
 
+  // New mail in a thread we already store belongs to that thread's lead(s), whatever
+  // its headers say. That covers a postmaster DSN, which names the lead only in its
+  // body. Those threads go back as `recheck` so syncLeadEmails expands them.
+  const { data: threadRows } = await serviceSupabase
+    .from("interactions")
+    .select("lead_id, gmail_thread_id")
+    .in("gmail_thread_id", [...new Set(fresh.map((m) => m.threadId))]);
+  const threadLeads = new Map<string, Set<string>>();
+  for (const r of (threadRows ?? []) as Array<{ lead_id: string; gmail_thread_id: string }>) {
+    if (!threadLeads.has(r.gmail_thread_id)) threadLeads.set(r.gmail_thread_id, new Set());
+    threadLeads.get(r.gmail_thread_id)!.add(r.lead_id);
+  }
+
+  // Only mail in threads we have never stored needs its headers read.
+  const unknownThread = fresh.filter((m) => !threadLeads.has(m.threadId)).slice(0, INCREMENTAL_METADATA_MAX);
   const heads: Array<{ from: string[]; to: string[] }> = [];
-  for (let i = 0; i < fresh.length; i += INCREMENTAL_FETCH_BATCH) {
-    const batch = await Promise.all(fresh.slice(i, i + INCREMENTAL_FETCH_BATCH).map(async (id) => {
+  for (let i = 0; i < unknownThread.length; i += INCREMENTAL_FETCH_BATCH) {
+    const batch = await Promise.all(unknownThread.slice(i, i + INCREMENTAL_FETCH_BATCH).map(async ({ id }) => {
       const r = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To`,
         auth,
@@ -1318,7 +1345,7 @@ async function findLeadsWithNewMail(
     }));
     for (const b of batch) if (b) heads.push(b);
   }
-  if (heads.length === 0) return [];
+  if (heads.length === 0 && threadLeads.size === 0) return [];
 
   // Paged: PostgREST caps a single response at max_rows (1000).
   const leads: ScheduledLead[] = [];
@@ -1335,7 +1362,22 @@ async function findLeadsWithNewMail(
     leads.push(...data);
     if (data.length < 1000) break;
   }
-  return leadsInMessages(heads, leads, repEmail);
+
+  // Only this rep's leads (the paged read above is owner + workspace scoped).
+  const byId = new Map(leads.map((l) => [l.id, l]));
+  const out = new Map<string, { lead: ScheduledLead; recheck: Set<string> }>();
+  for (const m of fresh) {
+    for (const leadId of threadLeads.get(m.threadId) ?? []) {
+      const lead = byId.get(leadId);
+      if (!lead) continue;
+      if (!out.has(leadId)) out.set(leadId, { lead, recheck: new Set() });
+      out.get(leadId)!.recheck.add(m.threadId);
+    }
+  }
+  for (const lead of leadsInMessages(heads, leads, repEmail)) {
+    if (!out.has(lead.id)) out.set(lead.id, { lead, recheck: new Set() });
+  }
+  return [...out.values()];
 }
 
 // Monotonic, ~per-tick rotation seed. The sweep cron fires every 20 min; bucketing
@@ -1537,7 +1579,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
     // ── Incremental pass: leads with new mail first (see findLeadsWithNewMail) ──
     // No cursor here. A lead the budget cuts off is still unstored, so it is
     // found again next run.
-    let newMailLeads: ScheduledLead[] = [];
+    let newMailLeads: Array<{ lead: ScheduledLead; recheck: Set<string> }> = [];
     try {
       newMailLeads = await findLeadsWithNewMail(serviceSupabase, accessToken, conn.user_id, workspaceIds, conn.gmail_email);
     } catch (err) {
@@ -1550,7 +1592,8 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
         break;
       }
       try {
-        const result = await syncLeadEmails(serviceSupabase, accessToken, newMailLeads[i], CRON_MAX_RESULTS, cadenceModes, conn.gmail_email);
+        const { lead, recheck } = newMailLeads[i];
+        const result = await syncLeadEmails(serviceSupabase, accessToken, lead, CRON_MAX_RESULTS, cadenceModes, conn.gmail_email, recheck);
         totalSynced += result.synced;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1560,7 +1603,7 @@ async function runScheduledBulkSync(serviceSupabase: any): Promise<Response> {
           accountAuthFailed = true;
           break;
         }
-        console.error(`[gmail-bulk-sync] cron: lead=${newMailLeads[i].id} incremental sync failed:`, msg);
+        console.error(`[gmail-bulk-sync] cron: lead=${newMailLeads[i].lead.id} incremental sync failed:`, msg);
       }
       leadsProcessed++;
       incrementalLeads++;
