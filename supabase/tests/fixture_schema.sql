@@ -312,3 +312,33 @@ CREATE POLICY "Lead owners can update timeline items" ON public.lead_timeline_it
     WHERE leads.id = lead_timeline_items.lead_id AND leads.owner_user_id = auth.uid()));
 GRANT SELECT, INSERT, UPDATE ON public.lead_timeline_items TO authenticated;
 GRANT SELECT ON public.leads TO authenticated;
+
+-- Added for manager_analytics.test.sql: the columns compute_manager_analytics_sql
+-- reads, and manager_views as created in 20260211212601.
+ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS deal_outlook text;
+ALTER TABLE public.leads ADD COLUMN IF NOT EXISTS last_outbound_at timestamptz;
+ALTER TABLE public.interactions ADD COLUMN IF NOT EXISTS source text;
+CREATE TABLE IF NOT EXISTS public.manager_views (
+  id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+  workspace_id uuid NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  rep_user_id uuid NOT NULL,
+  computed_at timestamptz NOT NULL DEFAULT now(),
+  avg_response_time_minutes double precision DEFAULT 0,
+  median_response_time_minutes double precision DEFAULT 0,
+  needs_reply_count integer DEFAULT 0,
+  stage_distribution jsonb DEFAULT '{}'::jsonb,
+  objection_frequency jsonb DEFAULT '{}'::jsonb,
+  high_ghost_risk_count integer DEFAULT 0,
+  medium_ghost_risk_count integer DEFAULT 0,
+  ghost_risk_contacts jsonb DEFAULT '[]'::jsonb,
+  channel_metrics jsonb DEFAULT '{}'::jsonb,
+  total_conversations integer DEFAULT 0,
+  total_messages_sent integer DEFAULT 0,
+  total_messages_received integer DEFAULT 0,
+  active_conversations integer DEFAULT 0,
+  sentiment_distribution jsonb DEFAULT '{}'::jsonb,
+  urgency_distribution jsonb DEFAULT '{}'::jsonb,
+  top_topics jsonb DEFAULT '[]'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (workspace_id, rep_user_id)
+);
